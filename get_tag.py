@@ -269,6 +269,42 @@ def get_docker_tags(repository: str) -> list[str]:
     response = _urlopen(url)
     return [result["name"] for result in json.loads(response.read())["results"]]
 
+def get_ghcr_tags(repository: str, token: str) -> list[str]:
+    if not token:
+        print("GHCR token not provided, attempting to fetch tags without authentication", file=sys.stderr)
+
+    # default package type is container
+    package_type = "container"
+
+    # Example repository: ghcr.io/Kamdzy/hoyolab-auto
+    # Parts: ["ghcr.io", "Kamdzy", "hoyolab-auto"]
+    parts = repository.split("/", 2)
+    if len(parts) < 3:
+        raise ValueError(f"Invalid GHCR repo format: {repository}")
+
+    owner = parts[1]
+    package = parts[2]
+    url = f"https://api.github.com/users/{owner}/packages/{package_type}/{package}/versions"
+
+    headers = {}
+    
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = urllib.request.Request(
+        url,
+        headers=headers
+    )
+    with urllib.request.urlopen(request) as response:
+        data = json.loads(response.read())
+
+    all_tags = []
+    for version_info in data:
+        container = version_info["metadata"]["container"]
+        tags = container.get("tags", [])
+        all_tags.extend(tags)
+
+    return all_tags
 
 def main():
     parser = argparse.ArgumentParser()
@@ -282,8 +318,14 @@ def main():
     group.add_argument("--gh-release", default=os.environ.get("TAG_GH_RELEASE"))
     group.add_argument("--gl-commit", default=os.environ.get("TAG_GL_COMMIT"))
     group.add_argument("--gl-tag", default=os.environ.get("TAG_GL_TAG"))
+    parser.add_argument("--ghcr-token", help="GitHub Token for GHCR", default=os.environ.get("GHCR_TOKEN"))
     args = parser.parse_args()
-    tags = get_docker_tags(args.docker_tag)
+
+    if "ghcr.io" in args.docker_tag:
+        tags = get_ghcr_tags(args.docker_tag, args.ghcr_token)
+    else:
+        tags = get_docker_tags(args.docker_tag)
+        
     if args.pip:
         tag = get_pip_version(args.pip)
     elif args.npm:
