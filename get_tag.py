@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import datetime
 import http.client
 import json
 import os
@@ -16,6 +17,14 @@ _SEP_BASE = "@"
 _DEFAULT_BRANCH = ""
 _DEFAULT_GH_BASE = "https://api.github.com"
 _DEFAULT_GL_BASE = "https://gitlab.com"
+_CR_COICES = {
+    "hourly": "%Y-%m-%dT%H",
+    "daily": "%Y-%m-%d",
+    "weekly": "%Y-W%V",
+    "monthly": "%Y-%m",
+    "yearly": "%Y",
+}
+_CR_COICES["annually"] = _CR_COICES["yearly"]
 
 
 def _urlopen(url: str, __retries: int = _RETRIES) -> http.client.HTTPResponse:
@@ -25,7 +34,7 @@ def _urlopen(url: str, __retries: int = _RETRIES) -> http.client.HTTPResponse:
         response = urllib.request.urlopen(url)
         assert 200 == response.status
         return response
-    except BaseException:
+    except Exception:
         if __retries:
             sleep = 30 * (_RETRIES - __retries + 1)
             print(f"{sleep=}", file=sys.stderr)
@@ -217,15 +226,41 @@ def get_gh_tag(repository: str) -> str:
     return get_gh_tags(repository)[-1]
 
 
-def get_gh_releases(repository: str) -> list[str]:
+def get_gh_releases_1(repository: str) -> list[str]:
     repository, base = _get_gh_repository_base(repository)
     url = f"{base}/repos/{repository}/releases"
     response = _urlopen(url)
-    return [result["tag_name"] for result in reversed(json.loads(response.read()))]
+    return [
+        result["tag_name"]
+        for result in reversed(json.loads(response.read()))
+        if not result["draft"] and not result["prerelease"]
+    ]
+
+
+def get_gh_release_1(repository: str) -> str:
+    return get_gh_releases_1(repository)[-1]
+
+
+def get_gh_release_2(repository: str) -> str:
+    repository, base = _get_gh_repository_base(repository)
+    url = f"{base}/repos/{repository}/releases/latest"
+    response = _urlopen(url)
+    return json.loads(response.read())["tag_name"]
 
 
 def get_gh_release(repository: str) -> str:
-    return get_gh_releases(repository)[-1]
+    return get_gh_release_2(repository)
+
+
+def get_gh_deployments(repository: str) -> list[str]:
+    repository, base = _get_gh_repository_base(repository)
+    url = f"{base}/repos/{repository}/deployments"
+    response = _urlopen(url)
+    return [result["sha"] for result in reversed(json.loads(response.read()))]
+
+
+def get_gh_deployment(repository: str) -> str:
+    return get_gh_deployments(repository)[-1]
 
 
 def _get_gl_repository_base(repository: str) -> tuple[str, str]:
@@ -264,7 +299,14 @@ def get_gl_tag(repository: str) -> str:
     return get_gl_tags(repository)[-1]
 
 
+def get_cron_tag(cron: str) -> str:
+    timestamp = datetime.datetime.now(datetime.UTC)
+    return timestamp.strftime(_CR_COICES[cron])
+
+
 def get_docker_tags(repository: str) -> list[str]:
+    if repository == "":
+        return []
     url = f"https://hub.docker.com/v2/repositories/{repository}/tags"
     response = _urlopen(url)
     return [result["name"] for result in json.loads(response.read())["results"]]
@@ -316,9 +358,11 @@ def main():
     group.add_argument("--gh-commit", default=os.environ.get("TAG_GH_COMMIT"))
     group.add_argument("--gh-tag", default=os.environ.get("TAG_GH_TAG"))
     group.add_argument("--gh-release", default=os.environ.get("TAG_GH_RELEASE"))
+    group.add_argument("--gh-deployment", default=os.environ.get("TAG_GH_DEPLOYMENT"))
     group.add_argument("--gl-commit", default=os.environ.get("TAG_GL_COMMIT"))
     group.add_argument("--gl-tag", default=os.environ.get("TAG_GL_TAG"))
     parser.add_argument("--ghcr-token", help="GitHub Token for GHCR", default=os.environ.get("GHCR_TOKEN"))
+    group.add_argument("--cr", default=os.environ.get("TAG_CR"), choices=_CR_COICES)
     args = parser.parse_args()
 
     if "ghcr.io" in args.docker_tag:
@@ -338,10 +382,14 @@ def main():
         tag = get_gh_tag(args.gh_tag)
     elif args.gh_release:
         tag = get_gh_release(args.gh_release)
+    elif args.gh_deployment:
+        tag = get_gh_deployment(args.gh_deployment)
     elif args.gl_commit:
         tag = get_gl_commit(args.gl_commit)
     elif args.gl_tag:
         tag = get_gl_tag(args.gl_tag)
+    elif args.cr:
+        tag = get_cron_tag(args.cr)
     else:
         raise NotImplementedError
     if tag not in tags:
