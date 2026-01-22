@@ -271,7 +271,7 @@ def _get_gl_repository(repository: str, base: str) -> int:
     if repository.isdigit():
         return int(repository)
     else:
-        url = f"{base}/api/v4/projects/{repository.replace('/', '%2F', 1)}"
+        url = f"{base}/api/v4/projects/{repository.replace('/', '%2F')}"
         response = _urlopen(url)
         return json.loads(response.read())["id"]
 
